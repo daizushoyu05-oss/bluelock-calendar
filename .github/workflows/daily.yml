@@ -2,8 +2,8 @@ name: daily-update
 
 on:
   schedule:
-    - cron: "0 21 * * *"   # 毎日朝6時（日本時間）
-  workflow_dispatch:        # 手動実行ボタン用
+    - cron: "0 21 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,8 +16,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install feedparser
+      - run: pip install feedparser requests
       - run: python bluelock.py
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       - name: Save calendar file
         run: |
           git config user.name "github-actions"
