@@ -1,7 +1,7 @@
 import feedparser, re, hashlib, urllib.parse
 from datetime import date, timedelta
 
-QUERIES = ["ブルーロック グッズ 発売", "ブルーロック 予約", "ブルーロック イベント 開催"]
+QUERIES = ["ブルーロック グッズ 発売", "ブルーロック 予約", "ブルーロック イベント 開催", "ブルーロック コラボ"]
 
 # タイトルにこの言葉が入っていたら除外（自由に追加OK）
 EXCLUDE = ["舞台", "実写", "THE STAGE", "ミュージカル", "綱", "菊池", "高橋"]
