@@ -1,14 +1,15 @@
 import feedparser, re, hashlib, urllib.parse
 from datetime import date, timedelta
 
-QUERIES = ["ブルーロック グッズ　発売", "ブルーロック 予約", "ブルーロック イベント 開催", "ブルーロック　コラボ"]
+QUERIES = ["ブルーロック 発売", "ブルーロック 予約", "ブルーロック 開催", "ブルーロック 決定"]
 
 # タイトルにこの言葉が入っていたら除外（自由に追加OK）
-EXCLUDE = ["舞台", "実写", "THE STAGE", "ミュージカル", "綱", "菊池", "高橋"]
+EXCLUDE = ["舞台", "実写", "THE STAGE", "ミュージカル","綱","高橋","菊池"]
 
 # 予定名を短くする言葉（自由に追加OK）
 SHORT = ["アニメイトカフェ", "コラボカフェ", "ローソン", "ポップアップ",
-         "一番くじ", "ガチャ", "フェア", "カフェ"]
+         "一番くじ", "ガチャ", "フェア", "カフェ",
+         "コミックス", "単行本", "Blu-ray", "DVD","グッズ"]
 
 today = date.today()
 events = {}
@@ -18,7 +19,8 @@ for q in QUERIES:
     url = ("https://news.google.com/rss/search?q="
            + urllib.parse.quote(q) + "&hl=ja&gl=JP&ceid=JP:ja")
     for e in feedparser.parse(url).entries:
-        title = e.title
+        # 末尾の「 - サイト名」を削る
+        title = re.sub(r"\s[-－–—]\s[^-－–—]*$", "", e.title)
         if "ブルーロック" not in title:
             continue
         if any(w in title for w in EXCLUDE):
