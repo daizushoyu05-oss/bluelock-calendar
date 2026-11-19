@@ -19,12 +19,13 @@ for q in QUERIES:
             d = date(today.year, int(m.group(1)), int(m.group(2)))
         except ValueError:
             continue
-                if d < today - timedelta(days=30):
+        if d < today - timedelta(days=30):
             if d.month <= 2 and today.month >= 11:
                 d = d.replace(year=today.year + 1)
             else:
                 continue
-
+        if any(d == v[0] for v in events.values()):
+            continue
         events[e.link] = (d, title)
 
 lines = ["BEGIN:VCALENDAR", "VERSION:2.0",
