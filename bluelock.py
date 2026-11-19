@@ -2,6 +2,10 @@ import feedparser, re, hashlib, urllib.parse
 from datetime import date, timedelta
 
 QUERIES = ["ブルーロック グッズ 発売", "ブルーロック 予約", "ブルーロック イベント 開催"]
+
+# タイトルにこの言葉が入っていたら除外（自由に追加OK）
+EXCLUDE = ["舞台", "実写", "THE STAGE", "ミュージカル", "綱", "菊池", "高橋"]
+
 today = date.today()
 events = {}
 
@@ -12,18 +16,27 @@ for q in QUERIES:
         title = e.title
         if "ブルーロック" not in title:
             continue
+        if any(w in title for w in EXCLUDE):
+            continue
+        p = e.get("published_parsed")
+        if not p:
+            continue
+        pub = date(p[0], p[1], p[2])
+        if pub < today - timedelta(days=60):
+            continue
         m = re.search(r"(\d{1,2})月(\d{1,2})日", title)
         if not m:
             continue
+        y = re.search(r"(20\d{2})年", title)
+        year = int(y.group(1)) if y else pub.year
         try:
-            d = date(today.year, int(m.group(1)), int(m.group(2)))
+            d = date(year, int(m.group(1)), int(m.group(2)))
         except ValueError:
             continue
-        if d < today - timedelta(days=30):
-            if d.month <= 2 and today.month >= 11:
-                d = d.replace(year=today.year + 1)
-            else:
-                continue
+        if not y and d < pub - timedelta(days=30):
+            d = d.replace(year=year + 1)
+        if d < today - timedelta(days=7):
+            continue
         if any(d == v[0] for v in events.values()):
             continue
         events[e.link] = (d, title)
