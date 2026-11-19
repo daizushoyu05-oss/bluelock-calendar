@@ -1,13 +1,18 @@
 import feedparser, re, hashlib, urllib.parse
 from datetime import date, timedelta
 
-QUERIES = ["ブルーロック グッズ 発売", "ブルーロック 予約", "ブルーロック イベント 開催", "ブルーロック コラボ"]
+QUERIES = ["ブルーロック グッズ　発売", "ブルーロック 予約", "ブルーロック イベント 開催", "ブルーロック　コラボ"]
 
 # タイトルにこの言葉が入っていたら除外（自由に追加OK）
 EXCLUDE = ["舞台", "実写", "THE STAGE", "ミュージカル", "綱", "菊池", "高橋"]
 
+# 予定名を短くする言葉（自由に追加OK）
+SHORT = ["アニメイトカフェ", "コラボカフェ", "ローソン", "ポップアップ",
+         "一番くじ", "ガチャ", "フェア", "カフェ"]
+
 today = date.today()
 events = {}
+seen = set()
 
 for q in QUERIES:
     url = ("https://news.google.com/rss/search?q="
@@ -24,34 +29,63 @@ for q in QUERIES:
         pub = date(p[0], p[1], p[2])
         if pub < today - timedelta(days=60):
             continue
-        m = re.search(r"(\d{1,2})月(\d{1,2})日", title)
-        if not m:
-            continue
+
+        # 期間（12月1日〜25日 など）を先に探す
+        r = re.search(
+            r"(\d{1,2})月(\d{1,2})日\s*[〜～~\-–]\s*(?:(\d{1,2})月)?(\d{1,2})日?",
+            title)
+        if r:
+            sm, sd = int(r.group(1)), int(r.group(2))
+            em = int(r.group(3)) if r.group(3) else sm
+            ed = int(r.group(4))
+        else:
+            m = re.search(r"(\d{1,2})月(\d{1,2})日", title)
+            if not m:
+                continue
+            sm, sd = int(m.group(1)), int(m.group(2))
+            em, ed = sm, sd
+
         y = re.search(r"(20\d{2})年", title)
         year = int(y.group(1)) if y else pub.year
         try:
-            d = date(year, int(m.group(1)), int(m.group(2)))
+            d = date(year, sm, sd)
+            if not y and d < pub - timedelta(days=30):
+                year += 1
+                d = date(year, sm, sd)
+            last = date(year, em, ed)
+            if last < d:
+                last = date(year + 1, em, ed)
         except ValueError:
             continue
-        if not y and d < pub - timedelta(days=30):
-            d = d.replace(year=year + 1)
-        if d < today - timedelta(days=7):
+        if last < today - timedelta(days=7):
             continue
-        if any(d == v[0] for v in events.values()):
+
+        # 予定名を作る
+        if "予約" in title:
+            tag = "予約"
+        elif "発売" in title:
+            tag = "発売"
+        else:
+            tag = "開催"
+        name = next((w for w in SHORT if w in title), None)
+        summary = f"【{tag}】ブルーロック {name}" if name else f"【{tag}】{title}"
+
+        if (d, summary) in seen:
             continue
-        events[e.link] = (d, title)
+        seen.add((d, summary))
+        events[e.link] = (d, last, summary)
 
 lines = ["BEGIN:VCALENDAR", "VERSION:2.0",
          "PRODID:-//bluelock-calendar//JP",
          "X-WR-CALNAME:ブルーロック情報"]
-for link, (d, title) in events.items():
+for link, (d, last, summary) in events.items():
     uid = hashlib.md5(link.encode()).hexdigest()
-    end = d + timedelta(days=1)
+    end = last + timedelta(days=1)
     lines += ["BEGIN:VEVENT", f"UID:{uid}@bluelock",
               f"DTSTAMP:{today:%Y%m%d}T000000Z",
               f"DTSTART;VALUE=DATE:{d:%Y%m%d}",
               f"DTEND;VALUE=DATE:{end:%Y%m%d}",
-              "SUMMARY:" + title.replace(",", "，"),
+              "SUMMARY:" + summary.replace(",", "，"),
               "URL:" + link, "END:VEVENT"]
 lines.append("END:VCALENDAR")
 
