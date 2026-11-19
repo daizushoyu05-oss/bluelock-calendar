@@ -87,7 +87,7 @@ for link, (d, last, summary) in events.items():
               f"DTSTAMP:{today:%Y%m%d}T000000Z",
               f"DTSTART;VALUE=DATE:{d:%Y%m%d}",
               f"DTEND;VALUE=DATE:{end:%Y%m%d}",
-              "SUMMARY:" + summary.replace(",", "，"),
+              "SUMMARY:" + summary.replace(",", "，")+ "ㅤ",
               "URL:" + link, "END:VEVENT"]
 lines.append("END:VCALENDAR")
 
