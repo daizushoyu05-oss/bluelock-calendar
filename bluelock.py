@@ -2,6 +2,15 @@ import feedparser, re, hashlib, urllib.parse, json, os, sys, time
 import requests
 from datetime import date, timedelta
 
+sys.stdout.reconfigure(line_buffering=True)
+START = time.time()
+TOTAL_SECONDS = 600  # 全体でこの秒数を超えたら残りをあきらめる
+
+
+def time_left():
+    return TOTAL_SECONDS - (time.time() - START)
+
+
 QUERIES = ["ブルーロック 発売", "ブルーロック 予約", "ブルーロック 開催",
            "ブルーロック 決定", "ブルーロック アニメ",
            "ブルーロック イベント", "ブルーロック コラボ",
@@ -76,14 +85,19 @@ PROMPT_B = """今日は__TODAY__です。Google検索を使って、アニメ「
 
 today = date.today()
 articles = {}
-UA = "Mozilla/5.0 (compatible; bluelock-calendar)"
+UA = {"User-Agent": "Mozilla/5.0 (compatible; bluelock-calendar)"}
 
 for q in QUERIES:
     url = ("https://news.google.com/rss/search?q="
            + urllib.parse.quote(q) + "&hl=ja&gl=JP&ceid=JP:ja")
-    feed = feedparser.parse(url, agent=UA)
-    print("検索:", q, "| 状態:", getattr(feed, "status", "なし"),
-          "| 取得:", len(feed.entries), "件")
+    try:
+        resp = requests.get(url, headers=UA, timeout=20)
+        feed = feedparser.parse(resp.content)
+        print("検索:", q, "| 状態:", resp.status_code,
+              "| 取得:", len(feed.entries), "件")
+    except Exception as ex:
+        print("検索:", q, "| 失敗:", str(ex)[:100])
+        continue
     for e in feed.entries:
         title = re.sub(r"\s[-－–—]\s[^-－–—]*$", "", e.title)
         if "ブルーロック" not in title:
@@ -108,8 +122,11 @@ if not items:
 
 
 def ask(prompt, search=False):
-    last = ""
+    timeout = 120 if search else 60
     for model in MODELS:
+        if time_left() < 30:
+            print("時間切れのため中止します")
+            return None
         url = ("https://generativelanguage.googleapis.com/v1beta/models/"
                + model + ":generateContent")
         body = {"contents": [{"parts": [{"text": prompt}]}],
@@ -124,12 +141,10 @@ def ask(prompt, search=False):
                     url,
                     headers={"x-goog-api-key": API_KEY,
                              "Content-Type": "application/json"},
-                    json=body, timeout=180)
+                    json=body, timeout=timeout)
             except requests.RequestException as ex:
-                last = model + ": " + str(ex)[:150]
-                print("  失敗:", last)
-                time.sleep(5)
-                continue
+                print("  失敗:", model, str(ex)[:120])
+                break  # 返事が来ないモデルは次へ
             if r.status_code == 200:
                 try:
                     parts = r.json()["candidates"][0]["content"]["parts"]
@@ -139,14 +154,12 @@ def ask(prompt, search=False):
                     print("使用モデル:", model, "(検索あり)" if search else "")
                     return data
                 except Exception as ex:
-                    last = model + ": 返答を読めませんでした " + str(ex)[:100]
-                    print("  失敗:", last)
+                    print("  失敗:", model, "返答を読めませんでした", str(ex)[:100])
                     break
-            last = (model + ": HTTP " + str(r.status_code) + " "
-                    + r.text.replace("\n", " ")[:200])
-            print("  失敗:", last)
-            if r.status_code in (429, 500, 503) and attempt == 0:
-                time.sleep(20)
+            print("  失敗:", model, "HTTP", r.status_code,
+                  r.text.replace("\n", " ")[:200])
+            if r.status_code in (429, 500, 503) and attempt == 0 and time_left() > 60:
+                time.sleep(15)
                 continue
             break
     print("Gemini失敗: 全部のモデルで失敗しました")
@@ -216,6 +229,9 @@ print("1段目（見出し）:", n1, "件")
 
 # ---- 2段目：Google検索で補完（失敗しても止めない） ----
 for theme in THEMES:
+    if time_left() < 150:
+        print("時間が足りないので、残りの検索は行いません")
+        break
     res = ask(PROMPT_B.replace("__TODAY__", str(today))
               .replace("__THEME__", theme), search=True)
     if res is None:
