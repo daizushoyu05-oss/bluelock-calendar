@@ -11,23 +11,25 @@ def time_left():
     return TOTAL_SECONDS - (time.time() - START)
 
 
-QUERIES = ["ブルーロック 発売", "ブルーロック 予約", "ブルーロック 開催",
-           "ブルーロック 決定", "ブルーロック アニメ",
-           "ブルーロック イベント", "ブルーロック コラボ",
-           "ブルーロック 新グッズ", "ブルーロック 受注",
-           "ブルーロック 販売", "ブルーロック ポップアップ"]
+# 従来版でも使う検索ワード
+QUERIES_OLD = ["ブルーロック 発売", "ブルーロック 予約", "ブルーロック 開催",
+               "ブルーロック 決定", "ブルーロック アニメ",
+               "ブルーロック イベント", "ブルーロック コラボ"]
+# Gemini版だけで追加する検索ワード
+QUERIES_NEW = ["ブルーロック 新グッズ", "ブルーロック 受注",
+               "ブルーロック 販売", "ブルーロック ポップアップ"]
 
-# 見出しにこの言葉があったらAIに渡さず除外（自由に追加OK）
+# 見出しにこの言葉があったら除外（自由に追加OK）
 EXCLUDE = ["舞台", "実写", "THE STAGE", "ミュージカル", "綱啓永", "高橋", "菊池"]
+
+# 従来版で、予定名を短くする言葉（自由に追加OK）
+SHORT = ["アニメイトカフェ", "コラボカフェ", "ローソン", "ポップアップ",
+         "一番くじ", "ガチャ", "フェア", "カフェ",
+         "コミックス", "単行本", "Blu-ray", "DVD"]
 
 # 使うモデル名（上から順に試す）
 MODELS = ["gemini-3.8-flash", "gemini-3.7-flash",
           "gemini-3.6-flash", "gemini-3.5-flash"]
-
-# AIが使えない日の簡易版で、予定名を短くする言葉（自由に追加OK）
-SHORT = ["アニメイトカフェ", "コラボカフェ", "ローソン", "ポップアップ",
-         "一番くじ", "ガチャ", "フェア", "カフェ",
-         "コミックス", "単行本", "Blu-ray", "DVD"]
 
 # 2段目の検索テーマ（自由に追加OK。増やすと検索回数も増えます）
 THEMES = [
@@ -41,9 +43,6 @@ THEMES = [
 MARK = "\u3164"
 
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
-if not API_KEY:
-    print("GEMINI_API_KEY が見つかりません")
-    sys.exit(1)
 
 FORMAT = """返す形式（JSONだけを返す）:
 {"events":[{"article":0,"name":"","kind":"","start":"","end":null,"place":null,"note":null,"source":null}]}
@@ -89,10 +88,12 @@ PROMPT_B = """今日は__TODAY__です。Google検索を使って、アニメ「
 """ + FORMAT
 
 today = date.today()
-articles = {}
+articles = {}      # Gemini版で使う全記事
+old_articles = {}  # 従来版で使う記事（元の検索ワード分だけ）
 UA = {"User-Agent": "Mozilla/5.0 (compatible; bluelock-calendar)"}
 
-for q in QUERIES:
+for q in QUERIES_OLD + QUERIES_NEW:
+    is_old = q in QUERIES_OLD
     url = ("https://news.google.com/rss/search?q="
            + urllib.parse.quote(q) + "&hl=ja&gl=JP&ceid=JP:ja")
     try:
@@ -116,9 +117,12 @@ for q in QUERIES:
         if pub < today - timedelta(days=60):
             continue
         articles[e.link] = (title, pub)
+        if is_old:
+            old_articles[e.link] = (title, pub)
 
 items = list(articles.items())
-print(len(items), "件の記事を見つけました")
+old_items = list(old_articles.items())
+print(len(items), "件の記事を見つけました（従来版の対象:", len(old_items), "件）")
 
 # 記事が0件のときは、古いbluelock.icsを残すためここで止める
 if not items:
@@ -205,78 +209,90 @@ def add(ev, link, title, from_search):
     return True
 
 
-def fallback(title, pub):
-    """AIが使えない日の簡易版：見出しの日付を読み取る"""
-    r = re.search(
-        r"(\d{1,2})月(\d{1,2})日\s*[〜～~\-–]\s*(?:(\d{1,2})月)?(\d{1,2})日?",
-        title)
-    if r:
-        sm, sd = int(r.group(1)), int(r.group(2))
-        em = int(r.group(3)) if r.group(3) else sm
-        ed = int(r.group(4))
-    else:
-        m = re.search(r"(\d{1,2})月(\d{1,2})日", title)
-        if not m:
-            return None
-        sm, sd = int(m.group(1)), int(m.group(2))
-        em, ed = sm, sd
-    y = re.search(r"(20\d{2})年", title)
-    year = int(y.group(1)) if y else pub.year
-    try:
-        d = date(year, sm, sd)
-        if not y and d < pub - timedelta(days=30):
-            year += 1
-            d = date(year, sm, sd)
-        last = date(year, em, ed)
-        if last < d:
-            last = date(year + 1, em, ed)
-    except ValueError:
-        return None
-    if "予約" in title:
-        kind = "予約"
-    elif "発売" in title:
-        kind = "発売"
-    else:
-        kind = "イベント"
-    name = next((w for w in SHORT if w in title), None)
-    if not name:
-        name = title.replace("ブルーロック", "").strip(" 　-")[:20]
-    return {"name": name, "kind": kind, "start": d.isoformat(),
-            "end": last.isoformat(), "place": None,
-            "note": "（AIが混雑していたため簡易版で作成）"}
+def build_old(old_items):
+    """Geminiが使えない日の従来版（【予約】などの括弧は付けない）"""
+    out = {}
+    seen = set()
+    for link, (title, pub) in old_items:
+        # 期間（12月1日〜25日 など）を先に探す
+        r = re.search(
+            r"(\d{1,2})月(\d{1,2})日\s*[〜～~\-–]\s*(?:(\d{1,2})月)?(\d{1,2})日?",
+            title)
+        if r:
+            sm, sd = int(r.group(1)), int(r.group(2))
+            em = int(r.group(3)) if r.group(3) else sm
+            ed = int(r.group(4))
+        else:
+            m = re.search(r"(\d{1,2})月(\d{1,2})日", title)
+            if not m:
+                continue
+            sm, sd = int(m.group(1)), int(m.group(2))
+            em, ed = sm, sd
 
-
-# ---- 1段目：ニュースの見出し ----
-gemini_failed = False
-for i in range(0, len(items), 25):
-    chunk = items[i:i + 25]
-    listing = "\n".join(
-        f"{n}|{pub}|{title}" for n, (link, (title, pub)) in enumerate(chunk))
-    res = ask(PROMPT_A.replace("__TODAY__", str(today))
-              .replace("__ARTICLES__", listing))
-    if res is None:
-        gemini_failed = True
-        print("AIが使えないので、この分は簡易版で作ります")
-        for link, (title, pub) in chunk:
-            ev = fallback(title, pub)
-            if ev:
-                add(ev, link, title, False)
-        continue
-    for ev in res.get("events", []):
+        y = re.search(r"(20\d{2})年", title)
+        year = int(y.group(1)) if y else pub.year
         try:
-            link, (title, pub) = chunk[int(ev["article"])]
-        except Exception:
+            d = date(year, sm, sd)
+            if not y and d < pub - timedelta(days=30):
+                year += 1
+                d = date(year, sm, sd)
+            last = date(year, em, ed)
+            if last < d:
+                last = date(year + 1, em, ed)
+        except ValueError:
             continue
-        add(ev, link, title, False)
-    time.sleep(3)
+        if last < today - timedelta(days=7):
+            continue
 
-n1 = len(events)
-print("1段目（見出し）:", n1, "件")
+        if "予約" in title:
+            tag = "予約"
+        elif "発売" in title:
+            tag = "発売"
+        else:
+            tag = ""
+        name = next((w for w in SHORT if w in title), None)
+        summary = (name + tag) if name else title
 
-# ---- 2段目：Google検索で補完（AIが混んでいる日は行わない） ----
-if gemini_failed:
-    print("AIが混んでいるため、検索による補完は行いません")
+        if (d, summary) in seen:
+            continue
+        seen.add((d, summary))
+        out[(link,)] = dict(d=d, last=last, summary=summary,
+                            place=None, desc="", link=link)
+    return out
+
+
+# ---- Gemini版：1段目（ニュースの見出し） ----
+gemini_failed = False
+if not API_KEY:
+    print("GEMINI_API_KEY が見つかりません")
+    gemini_failed = True
 else:
+    for i in range(0, len(items), 25):
+        chunk = items[i:i + 25]
+        listing = "\n".join(
+            f"{n}|{pub}|{title}" for n, (link, (title, pub)) in enumerate(chunk))
+        res = ask(PROMPT_A.replace("__TODAY__", str(today))
+                  .replace("__ARTICLES__", listing))
+        if res is None:
+            gemini_failed = True
+            break
+        for ev in res.get("events", []):
+            try:
+                link, (title, pub) = chunk[int(ev["article"])]
+            except Exception:
+                continue
+            add(ev, link, title, False)
+        time.sleep(3)
+
+if gemini_failed:
+    # Geminiが失敗した日は、全部を従来版で作り直す
+    print("Gemini版が失敗したので、従来版で作ります")
+    events = build_old(old_items)
+    print("従来版:", len(events), "件")
+else:
+    n1 = len(events)
+    print("Gemini版 1段目（見出し）:", n1, "件")
+    # ---- Gemini版：2段目（Google検索で補完。失敗しても止めない） ----
     for theme in THEMES:
         if time_left() < 150:
             print("時間が足りないので、残りの検索は行いません")
@@ -289,7 +305,7 @@ else:
         for ev in res.get("events", []):
             add(ev, "", "", True)
         time.sleep(3)
-    print("2段目（検索）で追加:", len(events) - n1, "件")
+    print("Gemini版 2段目（検索）で追加:", len(events) - n1, "件")
 
 # 予定が0件のときは、古いbluelock.icsを残す
 if not events:
@@ -315,7 +331,8 @@ for key, v in events.items():
               "SUMMARY:" + esc(v["summary"]) + MARK]
     if v["place"]:
         lines.append("LOCATION:" + esc(v["place"]))
-    lines.append("DESCRIPTION:" + esc(v["desc"]))
+    if v["desc"]:
+        lines.append("DESCRIPTION:" + esc(v["desc"]))
     if v["link"]:
         lines.append("URL:" + v["link"])
     lines.append("END:VEVENT")
