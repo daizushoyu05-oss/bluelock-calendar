@@ -24,6 +24,11 @@ EXCLUDE = ["舞台", "実写", "THE STAGE", "ミュージカル", "綱啓永", "
 MODELS = ["gemini-3.8-flash", "gemini-3.7-flash",
           "gemini-3.6-flash", "gemini-3.5-flash"]
 
+# AIが使えない日の簡易版で、予定名を短くする言葉（自由に追加OK）
+SHORT = ["アニメイトカフェ", "コラボカフェ", "ローソン", "ポップアップ",
+         "一番くじ", "ガチャ", "フェア", "カフェ",
+         "コミックス", "単行本", "Blu-ray", "DVD"]
+
 # 2段目の検索テーマ（自由に追加OK。増やすと検索回数も増えます）
 THEMES = [
     "単行本・Blu-ray・DVD・CD・ゲームなど、書籍や映像・音楽の発売",
@@ -200,8 +205,49 @@ def add(ev, link, title, from_search):
     return True
 
 
+def fallback(title, pub):
+    """AIが使えない日の簡易版：見出しの日付を読み取る"""
+    r = re.search(
+        r"(\d{1,2})月(\d{1,2})日\s*[〜～~\-–]\s*(?:(\d{1,2})月)?(\d{1,2})日?",
+        title)
+    if r:
+        sm, sd = int(r.group(1)), int(r.group(2))
+        em = int(r.group(3)) if r.group(3) else sm
+        ed = int(r.group(4))
+    else:
+        m = re.search(r"(\d{1,2})月(\d{1,2})日", title)
+        if not m:
+            return None
+        sm, sd = int(m.group(1)), int(m.group(2))
+        em, ed = sm, sd
+    y = re.search(r"(20\d{2})年", title)
+    year = int(y.group(1)) if y else pub.year
+    try:
+        d = date(year, sm, sd)
+        if not y and d < pub - timedelta(days=30):
+            year += 1
+            d = date(year, sm, sd)
+        last = date(year, em, ed)
+        if last < d:
+            last = date(year + 1, em, ed)
+    except ValueError:
+        return None
+    if "予約" in title:
+        kind = "予約"
+    elif "発売" in title:
+        kind = "発売"
+    else:
+        kind = "イベント"
+    name = next((w for w in SHORT if w in title), None)
+    if not name:
+        name = title.replace("ブルーロック", "").strip(" 　-")[:20]
+    return {"name": name, "kind": kind, "start": d.isoformat(),
+            "end": last.isoformat(), "place": None,
+            "note": "（AIが混雑していたため簡易版で作成）"}
+
+
 # ---- 1段目：ニュースの見出し ----
-failed = False
+gemini_failed = False
 for i in range(0, len(items), 25):
     chunk = items[i:i + 25]
     listing = "\n".join(
@@ -209,7 +255,12 @@ for i in range(0, len(items), 25):
     res = ask(PROMPT_A.replace("__TODAY__", str(today))
               .replace("__ARTICLES__", listing))
     if res is None:
-        failed = True
+        gemini_failed = True
+        print("AIが使えないので、この分は簡易版で作ります")
+        for link, (title, pub) in chunk:
+            ev = fallback(title, pub)
+            if ev:
+                add(ev, link, title, False)
         continue
     for ev in res.get("events", []):
         try:
@@ -219,31 +270,28 @@ for i in range(0, len(items), 25):
         add(ev, link, title, False)
     time.sleep(3)
 
-# 失敗したときは古いbluelock.icsを残すため、ここで止める
-if failed:
-    print("1段目のGeminiの処理に失敗したので、カレンダーは更新しません")
-    sys.exit(1)
-
 n1 = len(events)
 print("1段目（見出し）:", n1, "件")
 
-# ---- 2段目：Google検索で補完（失敗しても止めない） ----
-for theme in THEMES:
-    if time_left() < 150:
-        print("時間が足りないので、残りの検索は行いません")
-        break
-    res = ask(PROMPT_B.replace("__TODAY__", str(today))
-              .replace("__THEME__", theme), search=True)
-    if res is None:
-        print("検索に失敗したテーマ:", theme[:20])
-        continue
-    for ev in res.get("events", []):
-        add(ev, "", "", True)
-    time.sleep(3)
+# ---- 2段目：Google検索で補完（AIが混んでいる日は行わない） ----
+if gemini_failed:
+    print("AIが混んでいるため、検索による補完は行いません")
+else:
+    for theme in THEMES:
+        if time_left() < 150:
+            print("時間が足りないので、残りの検索は行いません")
+            break
+        res = ask(PROMPT_B.replace("__TODAY__", str(today))
+                  .replace("__THEME__", theme), search=True)
+        if res is None:
+            print("検索に失敗したテーマ:", theme[:20])
+            continue
+        for ev in res.get("events", []):
+            add(ev, "", "", True)
+        time.sleep(3)
+    print("2段目（検索）で追加:", len(events) - n1, "件")
 
-print("2段目（検索）で追加:", len(events) - n1, "件")
-
-# 予定が0件のときも、古いbluelock.icsを残す
+# 予定が0件のときは、古いbluelock.icsを残す
 if not events:
     print("予定が0件だったので、カレンダーは更新しません")
     sys.exit(1)
