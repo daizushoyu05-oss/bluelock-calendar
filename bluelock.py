@@ -12,8 +12,8 @@ QUERIES = ["ブルーロック 発売", "ブルーロック 予約", "ブルー�
 EXCLUDE = ["舞台", "実写", "THE STAGE", "ミュージカル", "綱啓永", "高橋", "菊池"]
 
 # 使うモデル名（上から順に試す）
-MODELS = ["gemini-3.5-flash", "gemini-3.6-flash",
-          "gemini-3.5-flash-lite", "gemini-2.5-flash"]
+MODELS = ["gemini-3.8-flash", "gemini-3.7-flash",
+          "gemini-3.6-flash", "gemini-3.5-flash"]
 
 # 2段目の検索テーマ（自由に追加OK。増やすと検索回数も増えます）
 THEMES = [
@@ -76,11 +76,15 @@ PROMPT_B = """今日は__TODAY__です。Google検索を使って、アニメ「
 
 today = date.today()
 articles = {}
+UA = "Mozilla/5.0 (compatible; bluelock-calendar)"
 
 for q in QUERIES:
     url = ("https://news.google.com/rss/search?q="
            + urllib.parse.quote(q) + "&hl=ja&gl=JP&ceid=JP:ja")
-    for e in feedparser.parse(url).entries:
+    feed = feedparser.parse(url, agent=UA)
+    print("検索:", q, "| 状態:", getattr(feed, "status", "なし"),
+          "| 取得:", len(feed.entries), "件")
+    for e in feed.entries:
         title = re.sub(r"\s[-－–—]\s[^-－–—]*$", "", e.title)
         if "ブルーロック" not in title:
             continue
@@ -96,6 +100,11 @@ for q in QUERIES:
 
 items = list(articles.items())
 print(len(items), "件の記事を見つけました")
+
+# 記事が0件のときは、古いbluelock.icsを残すためここで止める
+if not items:
+    print("記事が取れなかったので、カレンダーは更新しません")
+    sys.exit(1)
 
 
 def ask(prompt, search=False):
@@ -118,6 +127,7 @@ def ask(prompt, search=False):
                     json=body, timeout=180)
             except requests.RequestException as ex:
                 last = model + ": " + str(ex)[:150]
+                print("  失敗:", last)
                 time.sleep(5)
                 continue
             if r.status_code == 200:
@@ -130,13 +140,16 @@ def ask(prompt, search=False):
                     return data
                 except Exception as ex:
                     last = model + ": 返答を読めませんでした " + str(ex)[:100]
+                    print("  失敗:", last)
                     break
-            last = model + ": HTTP " + str(r.status_code) + " " + r.text[:200]
+            last = (model + ": HTTP " + str(r.status_code) + " "
+                    + r.text.replace("\n", " ")[:200])
+            print("  失敗:", last)
             if r.status_code in (429, 500, 503) and attempt == 0:
                 time.sleep(20)
                 continue
             break
-    print("Gemini失敗:", last)
+    print("Gemini失敗: 全部のモデルで失敗しました")
     return None
 
 
@@ -213,6 +226,11 @@ for theme in THEMES:
     time.sleep(3)
 
 print("2段目（検索）で追加:", len(events) - n1, "件")
+
+# 予定が0件のときも、古いbluelock.icsを残す
+if not events:
+    print("予定が0件だったので、カレンダーは更新しません")
+    sys.exit(1)
 
 
 def esc(s):
